@@ -378,7 +378,7 @@ def run_client():
     parser.add_option("-V", "--loud", dest="loud", action="store_true")
 
     (options, args) = parser.parse_args()
-                      
+    
     if options.verbose:
         logging.basicConfig(level=logging.INFO)
     if options.loud:
@@ -387,7 +387,26 @@ def run_client():
     client = Client()
     client.password = options.password
     client.conn(args[0], options.port)
-                      
+
+
+MAPPER = None
+REDUCER = None
+def mapper(f):
+    global MAPPER
+    MAPPER = f
+    return f
+
+def reducer(f):
+    global REDUCER
+    REDUCER = f
+    return f
+
+def run_job(datasource, password="", port=DEFAULT_PORT):
+    s = Server()
+    s.datasource = datasource
+    s.mapfn = MAPPER
+    s.reducefn = REDUCER
+    return s.run_server(password=password, port=port)
 
 if __name__ == '__main__':
     run_client()
