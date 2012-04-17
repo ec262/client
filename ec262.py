@@ -40,6 +40,7 @@ import uuid
 import operator
 import itertools
 import pprint
+import time
 
 pp = pprint.PrettyPrinter(indent=2)
 
@@ -55,7 +56,6 @@ class Protocol(asynchat.async_chat):
             asynchat.async_chat.__init__(self, conn)
         else:
             asynchat.async_chat.__init__(self)
-
         self.set_terminator("\n")
         self.buffer = ""
         self.mid_command = None
@@ -107,23 +107,43 @@ class Protocol(asynchat.async_chat):
             self.handle_close()
 
 
-class Client(Protocol):
+class Client(asyncore.dispatcher):
     def __init__(self):
-        Protocol.__init__(self)
-        self.mapfn = self.reducefn = None
-        self.uuid = uuid.uuid4()
-        
-    def conn(self, server, port):
-        self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.connect((server, port))
-        asyncore.loop()
+        asyncore.dispatcher.__init__(self)
     
-    def handle_connect(self):
-        self.send_command('identify', self.uuid)
+    def start_server(self, port=DEFAULT_PORT):
+        print "Starting server on %d" % port
+        self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.bind(("", port))
+        self.listen(1)
+        try:
+            asyncore.loop()
+        except:
+            self.close_all()
+            raise
+        print "Shutting down server"
+    
+    def handle_accept(self):
+        conn, addr = self.accept()
+        print "Accepting job from %s:%s" % addr
+        Worker(conn, self)
 
     def handle_close(self):
         self.close()
 
+class Worker(Protocol):
+    def __init__(self, conn, client):
+        Protocol.__init__(self, conn)
+        self.uuid = uuid.uuid4()
+        self.mapfn = self.reducefn = None
+        self.client = client
+        self.send_command('identify', self.uuid)
+    
+    def handle_close(self):
+        logging.debug('Worker disconnect')
+        self.close()
+    
     def set_mapfn(self, command, mapfn):
         self.mapfn = types.FunctionType(marshal.loads(mapfn), globals(), 'mapfn')
 
@@ -143,7 +163,7 @@ class Client(Protocol):
         logging.info("Reducing %s" % str(data[0]))
         results = self.reducefn(data[0], data[1])
         self.send_command('reducedone', (data[0], results))
-        
+
     def process_command(self, command, data=None):
         commands = {
             'mapfn': self.set_mapfn,
@@ -156,7 +176,7 @@ class Client(Protocol):
             commands[command](command, data)
         else:
             Protocol.process_command(self, command, data)
-
+        
 
 class Server(asyncore.dispatcher, object):
     def __init__(self):
@@ -165,23 +185,15 @@ class Server(asyncore.dispatcher, object):
         self.reducefn = None
         self.datasource = None
 
-    def run_server(self, port=DEFAULT_PORT):
-        self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
-        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.bind(("", port))
-        self.listen(1)
-        try:
-            asyncore.loop()
-        except:
-            self.close_all()
-            raise
+    def run_job(self):
+        workers = [("", 11123), ("", 11234)]
+        for worker in workers:
+            sc = ServerChannel(worker, self)
+        asyncore.loop()
         return self.taskmanager.results
 
-    def handle_accept(self):
-        conn, addr = self.accept()
-        sc = ServerChannel(conn, self)
-
     def handle_close(self):
+        logging.info("HIGH LEVEL DISCONNECT")
         self.close()
 
     def set_datasource(self, ds):
@@ -195,15 +207,25 @@ class Server(asyncore.dispatcher, object):
 
 
 class ServerChannel(Protocol):
-    def __init__(self, conn, server):
-        Protocol.__init__(self, conn)
+    def __init__(self, worker, server):
+        Protocol.__init__(self)
         self.server = server
         self.uuid = None
+        print "Connecting to worker %s:%d..." % worker
+        self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.connect(worker)
 
+    def handle_connect(self):
+        pass
+            
     def handle_close(self):
         logging.info("Client disconnected")
         self.close()
-
+        
+    def identify(self, command, data):
+        self.uuid = data
+        self.init_process()
+        
     def start_new_task(self):
         command, data = self.server.taskmanager.next_task(self)
         if command == None:
@@ -217,10 +239,6 @@ class ServerChannel(Protocol):
     def reduce_done(self, command, data):
         self.server.taskmanager.reduce_done(self, data)
         self.start_new_task()
-
-    def identify(self, command, data):
-        self.uuid = data
-        self.init_process()
     
     def process_command(self, command, data=None):
         commands = {
@@ -271,7 +289,6 @@ class TaskManager:
     def get_task(self, command, next_state):
         try:
             key, instance_num = self.data_iters[command].next()
-            print "get_task", key, instance_num
             if command == 'map':
                 value = self.datasource[key]
             elif command == 'reduce':
@@ -369,7 +386,6 @@ class TaskManager:
                                 
     def reduce_done(self, worker, data):
         def handler(data):
-            print data
             self.results[data[0]] = data[1]
         self.verify_task('reduce', handler, worker, data)
 
@@ -387,7 +403,7 @@ def run_client():
         logging.basicConfig(level=logging.DEBUG)
 
     client = Client()
-    client.conn(args[0], options.port)
+    client.start_server(options.port)
 
 
 MAPPER = None
@@ -403,11 +419,12 @@ def reducer(f):
     return f
 
 def run_job(datasource, port=DEFAULT_PORT):
+    logging.basicConfig(level=logging.DEBUG)
     s = Server()
     s.datasource = datasource
     s.mapfn = MAPPER
     s.reducefn = REDUCER
-    return s.run_server(port=port)
+    return s.run_job()
 
 if __name__ == '__main__':
     run_client()
