@@ -12,8 +12,8 @@ datasource = dict(enumerate(data))
 @mapper
 def mapfn(k, v):
     import time
+    time.sleep(0.5)
     for w in v.split():
-        time.sleep(0.5)
         yield w, 1
 
 @reducer
@@ -21,7 +21,7 @@ def reducefn(k, vs):
     import time
     time.sleep(0.5)
     result = sum(vs)
-    return result
+    return (k, result)
 
 
 if __name__ == '__main__':

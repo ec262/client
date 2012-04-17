@@ -215,7 +215,7 @@ class ServerChannel(Protocol):
         self.start_new_task()
 
     def reduce_done(self, command, data):
-        self.server.taskmanager.reduce_done(data)
+        self.server.taskmanager.reduce_done(self, data)
         self.start_new_task()
 
     def identify(self, command, data):
@@ -254,40 +254,50 @@ class TaskManager:
         self.running_tasks = None
         self.worker_map = None
 
-    def run_task(self, worker, command, data, instance_num):
-        if (data, instance_num) not in self.running_tasks[command]:
-            self.running_tasks[command][(data, instance_num)] = set()
-        self.running_tasks[command][(data, instance_num)].add(worker.uuid.hex)
-        self.worker_map[worker.uuid] = (data, instance_num)
+    def execute_task(self, worker, command, data, instance_num):
+        key, value = data
+        if (key, instance_num) not in self.running_tasks[command]:
+            self.running_tasks[command][(key, instance_num)] = set()
+        self.running_tasks[command][(key, instance_num)].add(worker.uuid.hex)
+        self.worker_map[worker.uuid] = (key, instance_num)
         return (command, data)
     
-    def run_map(self, worker, next_state):
-        task = self.get_task('map', next_state)
+    def run_task(self, command, worker, next_state):
+        task = self.get_task(command, next_state)
         if task is not None:
             data, instance_num = task
-            return self.run_task(worker, 'map', data, instance_num)
+            return self.execute_task(worker, command, data, instance_num)
 
     def get_task(self, command, next_state):
         try:
             key, instance_num = self.data_iters[command].next()
-            value = self.datasource[key]
+            print "get_task", key, instance_num
+            if command == 'map':
+                value = self.datasource[key]
+            elif command == 'reduce':
+                value = self.map_results[key]
             return (key, value), instance_num
         except StopIteration:
             if len(self.running_tasks[command]) > 0:
-                data, instance_num = random.choice(self.running_tasks[command].keys())
-                return data, instance_num
+                key, instance_num = random.choice(self.running_tasks[command].keys())
+                if command == 'map':
+                    value = self.datasource[key]
+                elif command == 'reduce':
+                    value = self.map_results[key]
+                return (key, value), instance_num
             self.state = next_state
             return None
 
     def verify_task(self, command, handler, worker, data):
         if worker.uuid not in self.worker_map:
             return
-        task_data, instance_num = self.worker_map[worker.uuid]
-        if task_data[0] != data[0]:
+        task_key, instance_num = self.worker_map[worker.uuid]
+        key, task_output = data
+        if task_key != key:
             return
-        if (task_data, instance_num) not in self.running_tasks[command]:
+        if (task_key, instance_num) not in self.running_tasks[command]:
             return
-        del self.running_tasks[command][(task_data, instance_num)]
+        del self.running_tasks[command][(task_key, instance_num)]
         
         # Keep track of finished tasks
         key, task_output = data
@@ -301,7 +311,10 @@ class TaskManager:
             hashes = {}
             # Tabulate votes
             for instance_num in self.finished_tasks[command][key]:
-                h = hash(frozenset(self.finished_tasks[command][key][instance_num]))
+                if isinstance(self.finished_tasks[command][key][instance_num], dict):
+                    h = hash(frozenset(self.finished_tasks[command][key][instance_num]))
+                else:
+                    h = hash(self.finished_tasks[command][key][instance_num])
                 if h not in votes:
                     votes[h] = 0
                     hashes[h] = self.finished_tasks[command][key][instance_num]
@@ -314,57 +327,51 @@ class TaskManager:
 
     def next_task(self, worker):
         if self.state == TaskManager.START:
-            self.data_iters = {
-                'map': itertools.product(iter(self.datasource), range(self.copies))
-            }
             self.worker_map = {}
+            self.data_iters = {
+                'map': itertools.product(iter(self.datasource), range(self.copies)),
+                'reduce': None
+            }
             self.running_tasks = {
-                'map': {}
+                'map': {},
+                'reduce': {}
             }
             self.finished_tasks = {
-                'map': {}
+                'map': {},
+                'reduce': {}
             }
-            
             self.map_results = {}
-            self.working_reduces = {}
             self.results = {}
             self.state = TaskManager.MAPPING
         
         if self.state == TaskManager.MAPPING:
-            command = self.run_map(worker, TaskManager.REDUCING)
+            command = self.run_task('map', worker, TaskManager.REDUCING)
             if command is not None:
                 return command
-            self.reduce_iter = self.map_results.iteritems()
+            self.data_iters['reduce'] = itertools.product(iter(self.map_results), range(self.copies))
         
         if self.state == TaskManager.REDUCING:
-            try:
-                reduce_item = self.reduce_iter.next()
-                self.working_reduces[reduce_item[0]] = reduce_item[1]
-                return ('reduce', reduce_item)
-            except StopIteration:
-                if len(self.working_reduces) > 0:
-                    key = random.choice(self.working_reduces.keys())
-                    return ('reduce', (key, self.working_reduces[key]))
-                self.state = TaskManager.FINISHED
+            command = self.run_task('reduce', worker, TaskManager.FINISHED)
+            if command is not None:
+                return command
+        
         if self.state == TaskManager.FINISHED:
             self.server.handle_close()
             return ('disconnect', None)
     
     def map_done(self, worker, data):
         def handler(data):
-            print "Handling!", data
             for (key, values) in data.iteritems():
                 if key not in self.map_results:
                     self.map_results[key] = []
                 self.map_results[key].extend(values)
         self.verify_task('map', handler, worker, data)
                                 
-    def reduce_done(self, data):
-        # Don't use the results if they've already been counted
-        if not data[0] in self.working_reduces:
-            return
-        self.results[data[0]] = data[1]
-        del self.working_reduces[data[0]]
+    def reduce_done(self, worker, data):
+        def handler(data):
+            print data
+            self.results[data[0]] = data[1]
+        self.verify_task('reduce', handler, worker, data)
 
 def run_client():
     parser = optparse.OptionParser(usage="%prog [options]", version="%%prog %s"%VERSION)
