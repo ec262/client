@@ -13,13 +13,17 @@ datasource = dict(enumerate(data))
 def mapfn(k, v):
     import time
     for w in v.split():
-        #time.sleep(1)
+        time.sleep(0.5)
         yield w, 1
 
 @reducer
 def reducefn(k, vs):
+    import time
+    time.sleep(0.5)
     result = sum(vs)
     return result
 
-results = run_job(datasource, password="changeme")
-print results
+
+if __name__ == '__main__':
+    results = run_job(datasource, password="changeme")
+    print results

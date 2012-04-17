@@ -43,7 +43,6 @@ VERSION = "0.1.2"
 DEFAULT_PORT = 11235
 
 
-
 class Protocol(asynchat.async_chat):
     def __init__(self, conn=None):
         if conn:
@@ -52,107 +51,53 @@ class Protocol(asynchat.async_chat):
             asynchat.async_chat.__init__(self)
 
         self.set_terminator("\n")
-        self.buffer = []
-        self.auth = None
-        self.mid_command = False
+        self.buffer = ""
+        self.mid_command = None
 
     def collect_incoming_data(self, data):
         """Receive data and append it to an internal buffer"""
-        self.buffer.append(data)
+        self.buffer += data
 
     def send_command(self, command, data=None):
         """Send command and optional data over connection
         
-        * If only `command` is given, it should be a string w/o colons. The 
-          message sent will be "command:\\n". The one exception to this is
-          if the command is "challenge", which should be 
-          "challenge:msg_to_encode"
-        * If `data` is also specified, then `data` will be pickled and
-          the length of the pickle will be appended to `command`. 
-          "command:data_length\\n" will then be sent, followed by the pickled 
-          data.
+        * `command` is a string without colons and newlines; a colon is always
+          appended to it
+        * If `data` is specified, then it will be pickled and appended to 
+          `command`.
         """
-        if not ":" in command:
-            command += ":"
+        command += ':'
         if data:
             pdata = pickle.dumps(data)
-            command += str(len(pdata))
-            logging.debug( "<- %s" % command)
-            self.push(command + "\n" + pdata)
+            self.push(command + str(len(pdata)) + '\n' + pdata)
         else:
-            logging.debug( "<- %s" % command)
             self.push(command + "\n")
 
     def found_terminator(self):
-        if not self.auth == "Done":
-            # Command is not authenticated
-            command, data = (''.join(self.buffer).split(":",1))
-            self.process_unauthed_command(command, data)
-        elif not self.mid_command:
-            # Starting a new command
-            logging.debug("-> %s" % ''.join(self.buffer))
-            command, length = (''.join(self.buffer)).split(":", 1)
-            if command == "challenge":
-                self.process_command(command, length)
-            elif length:
-                self.set_terminator(int(length))
+        if not self.mid_command:
+            command, data_length = self.buffer.split(":", 1)
+            if data_length:
+                self.set_terminator(int(data_length))
                 self.mid_command = command
             else:
                 self.process_command(command)
-        else: # Read the data segment from the previous command
-            if not self.auth == "Done":
-                logging.fatal("Recieved pickled data from unauthed source")
-                sys.exit(1)
-            data = pickle.loads(''.join(self.buffer))
+        else:
+            data = pickle.loads(self.buffer)
             self.set_terminator("\n")
             command = self.mid_command
             self.mid_command = None
             self.process_command(command, data)
-        self.buffer = []
-
-    def send_challenge(self):
-        """Set `self.auth` to a random string; send "challenge" command"""
-        self.auth = os.urandom(20).encode("hex")
-        self.send_command(":".join(["challenge", self.auth]))
-
-    def respond_to_challenge(self, command, data):
-        """Encode `data` with `self.password` and return "auth" message"""
-        mac = hmac.new(self.password, data, hashlib.sha1)
-        self.send_command(":".join(["auth", mac.digest().encode("hex")]))
-        self.post_auth_init()
-
-    def verify_auth(self, command, data):
-        """Sets `self.auth` to "Done" if password is same as client's"""
-        mac = hmac.new(self.password, self.auth, hashlib.sha1)
-        if data == mac.digest().encode("hex"):
-            self.auth = "Done"
-            logging.info("Authenticated other end")
-        else:
-            self.handle_close()
+        self.buffer = ""
 
     def process_command(self, command, data=None):
         commands = {
-            'challenge': self.respond_to_challenge,
             'disconnect': lambda x, y: self.handle_close(),
-            }
-
+        }
+        
         if command in commands:
             commands[command](command, data)
         else:
             logging.critical("Unknown command received: %s" % (command,)) 
-            self.handle_close()
-
-    def process_unauthed_command(self, command, data=None):
-        commands = {
-            'challenge': self.respond_to_challenge,
-            'auth': self.verify_auth,
-            'disconnect': lambda x, y: self.handle_close(),
-            }
-
-        if command in commands:
-            commands[command](command, data)
-        else:
-            logging.critical("Unknown unauthed command received: %s" % (command,)) 
             self.handle_close()
         
 
@@ -213,8 +158,7 @@ class Client(Protocol):
             Protocol.process_command(self, command, data)
 
     def post_auth_init(self):
-        if not self.auth:
-            self.send_challenge()
+        pass
 
 
 class Server(asyncore.dispatcher, object):
@@ -229,6 +173,7 @@ class Server(asyncore.dispatcher, object):
     def run_server(self, password="", port=DEFAULT_PORT):
         self.password = password
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
+        self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.bind(("", port))
         self.listen(1)
         try:
@@ -261,15 +206,11 @@ class ServerChannel(Protocol):
     def __init__(self, conn, server):
         Protocol.__init__(self, conn)
         self.server = server
-
-        self.start_auth()
+        self.post_auth_init()
 
     def handle_close(self):
         logging.info("Client disconnected")
         self.close()
-
-    def start_auth(self):
-        self.send_challenge()
 
     def start_new_task(self):
         command, data = self.server.taskmanager.next_task(self)
@@ -295,7 +236,7 @@ class ServerChannel(Protocol):
             commands[command](command, data)
         else:
             Protocol.process_command(self, command, data)
-
+    
     def post_auth_init(self):
         if self.server.mapfn:
             self.send_command('mapfn', marshal.dumps(self.server.mapfn.func_code))
@@ -304,7 +245,7 @@ class ServerChannel(Protocol):
         if self.server.collectfn:
             self.send_command('collectfn', marshal.dumps(self.server.collectfn.func_code))
         self.start_new_task()
-    
+
 class TaskManager:
     START = 0
     MAPPING = 1
