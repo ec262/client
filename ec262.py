@@ -38,6 +38,10 @@ import sys
 import types
 import uuid
 import operator
+import itertools
+import pprint
+
+pp = pprint.PrettyPrinter(indent=2)
 
 VERSION = "0.1.2"
 
@@ -207,7 +211,7 @@ class ServerChannel(Protocol):
         self.send_command(command, data)
 
     def map_done(self, command, data):
-        self.server.taskmanager.map_done(self.uuid, data)
+        self.server.taskmanager.map_done(self, data)
         self.start_new_task()
 
     def reduce_done(self, command, data):
@@ -247,44 +251,91 @@ class TaskManager:
         self.server = server
         self.state = TaskManager.START
         self.copies = 3
+        self.running_tasks = None
+        self.worker_map = None
 
-    def next_task(self, channel):
+    def run_task(self, worker, command, data, instance_num):
+        if (data, instance_num) not in self.running_tasks[command]:
+            self.running_tasks[command][(data, instance_num)] = set()
+        self.running_tasks[command][(data, instance_num)].add(worker.uuid.hex)
+        self.worker_map[worker.uuid] = (data, instance_num)
+        return (command, data)
+    
+    def run_map(self, worker, next_state):
+        task = self.get_task('map', next_state)
+        if task is not None:
+            data, instance_num = task
+            return self.run_task(worker, 'map', data, instance_num)
+
+    def get_task(self, command, next_state):
+        try:
+            key, instance_num = self.data_iters[command].next()
+            value = self.datasource[key]
+            return (key, value), instance_num
+        except StopIteration:
+            if len(self.running_tasks[command]) > 0:
+                data, instance_num = random.choice(self.running_tasks[command].keys())
+                return data, instance_num
+            self.state = next_state
+            return None
+
+    def verify_task(self, command, handler, worker, data):
+        if worker.uuid not in self.worker_map:
+            return
+        task_data, instance_num = self.worker_map[worker.uuid]
+        if task_data[0] != data[0]:
+            return
+        if (task_data, instance_num) not in self.running_tasks[command]:
+            return
+        del self.running_tasks[command][(task_data, instance_num)]
+        
+        # Keep track of finished tasks
+        key, task_output = data
+        if key not in self.finished_tasks[command]:
+            self.finished_tasks[command][key] = {}
+        self.finished_tasks[command][key][instance_num] = task_output
+        
+        # Wait until all copies have completed
+        if len(self.finished_tasks[command][key]) == self.copies:
+            votes = {}
+            hashes = {}
+            # Tabulate votes
+            for instance_num in self.finished_tasks[command][key]:
+                h = hash(frozenset(self.finished_tasks[command][key][instance_num]))
+                if h not in votes:
+                    votes[h] = 0
+                    hashes[h] = self.finished_tasks[command][key][instance_num]
+                votes[h] += 1
+            # Find majority vote
+            majority_vote = max(votes.iteritems(), key=operator.itemgetter(1))[0]
+            if votes[majority_vote] > self.copies / 2:
+                output = hashes[majority_vote]
+                handler(output)
+
+    def next_task(self, worker):
         if self.state == TaskManager.START:
-            self.map_iter = iter(self.datasource)
-            
-            self.working_maps = {}
-            self.uuid_map = {}
-            self.finished_maps = {}
+            self.data_iters = {
+                'map': itertools.product(iter(self.datasource), range(self.copies))
+            }
+            self.worker_map = {}
+            self.running_tasks = {
+                'map': {}
+            }
+            self.finished_tasks = {
+                'map': {}
+            }
             
             self.map_results = {}
+            self.working_reduces = {}
+            self.results = {}
             self.state = TaskManager.MAPPING
-            self.cur_key = None
-            self.copy_num = 0
+        
         if self.state == TaskManager.MAPPING:
-            try:
-                if self.cur_key is None or self.copy_num == (self.copies - 1):
-                    self.cur_key = self.map_iter.next()
-                    self.copy_num = 0
-                else:
-                    self.copy_num += 1
-                map_key = self.cur_key
-                map_value = self.datasource[map_key]
-                map_item = map_key, map_value
-                self.working_maps[(map_key, self.copy_num)] = set(channel.uuid.hex)
-                self.uuid_map[channel.uuid] = (map_key, self.copy_num)
-                return ('map', map_item)
-                
-            except StopIteration:
-                if len(self.working_maps) > 0:
-                    map_key, copy_num = random.choice(self.working_maps.keys())
-                    map_value = self.datasource[map_key]
-                    self.working_maps[(map_key, copy_num)].add(channel.uuid.hex)
-                    self.uuid_map[channel.uuid] = (map_key, self.copy_num)
-                    return ('map', (map_key, map_value))
-                self.state = TaskManager.REDUCING
-                self.reduce_iter = self.map_results.iteritems()
-                self.working_reduces = {}
-                self.results = {}
+            command = self.run_map(worker, TaskManager.REDUCING)
+            if command is not None:
+                return command
+            self.reduce_iter = self.map_results.iteritems()
+        
         if self.state == TaskManager.REDUCING:
             try:
                 reduce_item = self.reduce_iter.next()
@@ -299,41 +350,14 @@ class TaskManager:
             self.server.handle_close()
             return ('disconnect', None)
     
-    def map_done(self, uuid, data):
-        # Don't use the results if they've already been counted
-        map_key, map_ouptput = data
-        if uuid not in self.uuid_map:
-            return
-        task_map_key, task_copy_num = self.uuid_map[uuid]
-        if map_key != task_map_key:
-            return
-        if (map_key, task_copy_num) not in self.working_maps:
-            return
-        del self.working_maps[(map_key, task_copy_num)]
-        
-        # Keep track of results we've computed
-        if map_key not in self.finished_maps:
-            self.finished_maps[map_key] = {}
-        self.finished_maps[map_key][task_copy_num] = map_ouptput
-        
-        # Wait until all copies have completed
-        if len(self.finished_maps[map_key]) == self.copies:
-            votes = {}
-            hashes = {}
-            for copy_num in self.finished_maps[map_key]:
-                print self.finished_maps[map_key][copy_num]
-                h = hash(frozenset(self.finished_maps[map_key][copy_num]))
-                if h not in votes:
-                    votes[h] = 0
-                    hashes[h] = self.finished_maps[map_key][copy_num]
-                votes[h] += 1
-            majority_vote = max(votes.iteritems(), key=operator.itemgetter(1))[0]
-            if votes[majority_vote] > self.copies / 2:
-                map_output = hashes[majority_vote]
-                for (key, values) in map_output.iteritems():
-                    if key not in self.map_results:
-                        self.map_results[key] = []
-                    self.map_results[key].extend(values)
+    def map_done(self, worker, data):
+        def handler(data):
+            print "Handling!", data
+            for (key, values) in data.iteritems():
+                if key not in self.map_results:
+                    self.map_results[key] = []
+                self.map_results[key].extend(values)
+        self.verify_task('map', handler, worker, data)
                                 
     def reduce_done(self, data):
         # Don't use the results if they've already been counted
