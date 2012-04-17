@@ -99,29 +99,23 @@ class Protocol(asynchat.async_chat):
         else:
             logging.critical("Unknown command received: %s" % (command,)) 
             self.handle_close()
-        
+
 
 class Client(Protocol):
     def __init__(self):
         Protocol.__init__(self)
-        self.mapfn = self.reducefn = self.collectfn = None
+        self.mapfn = self.reducefn = None
         
     def conn(self, server, port):
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.connect((server, port))
         asyncore.loop()
 
-    def handle_connect(self):
-        pass
-
     def handle_close(self):
         self.close()
 
     def set_mapfn(self, command, mapfn):
         self.mapfn = types.FunctionType(marshal.loads(mapfn), globals(), 'mapfn')
-
-    def set_collectfn(self, command, collectfn):
-        self.collectfn = types.FunctionType(marshal.loads(collectfn), globals(), 'collectfn')
 
     def set_reducefn(self, command, reducefn):
         self.reducefn = types.FunctionType(marshal.loads(reducefn), globals(), 'reducefn')
@@ -133,9 +127,6 @@ class Client(Protocol):
             if k not in results:
                 results[k] = []
             results[k].append(v)
-        if self.collectfn:
-            for k in results:
-                results[k] = [self.collectfn(k, results[k])]
         self.send_command('mapdone', (data[0], results))
 
     def call_reducefn(self, command, data):
@@ -146,19 +137,15 @@ class Client(Protocol):
     def process_command(self, command, data=None):
         commands = {
             'mapfn': self.set_mapfn,
-            'collectfn': self.set_collectfn,
             'reducefn': self.set_reducefn,
             'map': self.call_mapfn,
             'reduce': self.call_reducefn,
-            }
+        }
 
         if command in commands:
             commands[command](command, data)
         else:
             Protocol.process_command(self, command, data)
-
-    def post_auth_init(self):
-        pass
 
 
 class Server(asyncore.dispatcher, object):
@@ -166,12 +153,9 @@ class Server(asyncore.dispatcher, object):
         asyncore.dispatcher.__init__(self)
         self.mapfn = None
         self.reducefn = None
-        self.collectfn = None
         self.datasource = None
-        self.password = None
 
-    def run_server(self, password="", port=DEFAULT_PORT):
-        self.password = password
+    def run_server(self, port=DEFAULT_PORT):
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.bind(("", port))
@@ -181,13 +165,11 @@ class Server(asyncore.dispatcher, object):
         except:
             self.close_all()
             raise
-        
         return self.taskmanager.results
 
     def handle_accept(self):
         conn, addr = self.accept()
         sc = ServerChannel(conn, self)
-        sc.password = self.password
 
     def handle_close(self):
         self.close()
@@ -230,8 +212,7 @@ class ServerChannel(Protocol):
         commands = {
             'mapdone': self.map_done,
             'reducedone': self.reduce_done,
-            }
-
+        }
         if command in commands:
             commands[command](command, data)
         else:
@@ -242,8 +223,6 @@ class ServerChannel(Protocol):
             self.send_command('mapfn', marshal.dumps(self.server.mapfn.func_code))
         if self.server.reducefn:
             self.send_command('reducefn', marshal.dumps(self.server.reducefn.func_code))
-        if self.server.collectfn:
-            self.send_command('collectfn', marshal.dumps(self.server.collectfn.func_code))
         self.start_new_task()
 
 class TaskManager:
@@ -313,7 +292,6 @@ class TaskManager:
 
 def run_client():
     parser = optparse.OptionParser(usage="%prog [options]", version="%%prog %s"%VERSION)
-    parser.add_option("-p", "--password", dest="password", default="", help="password")
     parser.add_option("-P", "--port", dest="port", type="int", default=DEFAULT_PORT, help="port")
     parser.add_option("-v", "--verbose", dest="verbose", action="store_true")
     parser.add_option("-V", "--loud", dest="loud", action="store_true")
@@ -326,7 +304,6 @@ def run_client():
         logging.basicConfig(level=logging.DEBUG)
 
     client = Client()
-    client.password = options.password
     client.conn(args[0], options.port)
 
 
@@ -342,12 +319,12 @@ def reducer(f):
     REDUCER = f
     return f
 
-def run_job(datasource, password="", port=DEFAULT_PORT):
+def run_job(datasource, port=DEFAULT_PORT):
     s = Server()
     s.datasource = datasource
     s.mapfn = MAPPER
     s.reducefn = REDUCER
-    return s.run_server(password=password, port=port)
+    return s.run_server(port=port)
 
 if __name__ == '__main__':
     run_client()

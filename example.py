@@ -25,5 +25,5 @@ def reducefn(k, vs):
 
 
 if __name__ == '__main__':
-    results = run_job(datasource, password="changeme")
+    results = run_job(datasource)
     print results
