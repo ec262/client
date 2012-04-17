@@ -36,6 +36,7 @@ import random
 import socket
 import sys
 import types
+import uuid
 
 VERSION = "0.1.2"
 
@@ -105,11 +106,15 @@ class Client(Protocol):
     def __init__(self):
         Protocol.__init__(self)
         self.mapfn = self.reducefn = None
+        self.uuid = uuid.uuid4()
         
     def conn(self, server, port):
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.connect((server, port))
         asyncore.loop()
+    
+    def handle_connect(self):
+        self.send_command('identify', self.uuid)
 
     def handle_close(self):
         self.close()
@@ -188,7 +193,7 @@ class ServerChannel(Protocol):
     def __init__(self, conn, server):
         Protocol.__init__(self, conn)
         self.server = server
-        self.post_auth_init()
+        self.uuid = None
 
     def handle_close(self):
         logging.info("Client disconnected")
@@ -208,8 +213,13 @@ class ServerChannel(Protocol):
         self.server.taskmanager.reduce_done(data)
         self.start_new_task()
 
+    def identify(self, command, data):
+        self.uuid = data
+        self.init_process()
+    
     def process_command(self, command, data=None):
         commands = {
+            'identify': self.identify,
             'mapdone': self.map_done,
             'reducedone': self.reduce_done,
         }
@@ -218,7 +228,7 @@ class ServerChannel(Protocol):
         else:
             Protocol.process_command(self, command, data)
     
-    def post_auth_init(self):
+    def init_process(self):
         if self.server.mapfn:
             self.send_command('mapfn', marshal.dumps(self.server.mapfn.func_code))
         if self.server.reducefn:
@@ -241,7 +251,6 @@ class TaskManager:
             self.map_iter = iter(self.datasource)
             self.working_maps = {}
             self.map_results = {}
-            #self.waiting_for_maps = []
             self.state = TaskManager.MAPPING
         if self.state == TaskManager.MAPPING:
             try:
@@ -275,7 +284,6 @@ class TaskManager:
         # Don't use the results if they've already been counted
         if not data[0] in self.working_maps:
             return
-
         for (key, values) in data[1].iteritems():
             if key not in self.map_results:
                 self.map_results[key] = []
@@ -286,7 +294,6 @@ class TaskManager:
         # Don't use the results if they've already been counted
         if not data[0] in self.working_reduces:
             return
-
         self.results[data[0]] = data[1]
         del self.working_reduces[data[0]]
 
