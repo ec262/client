@@ -80,6 +80,10 @@ class Protocol(asynchat.async_chat):
             self.push(command + "\n")
 
     def found_terminator(self):
+        """Process a received command
+        
+        Should command have data, set next command
+        """
         if not self.mid_command:
             command, data_length = self.buffer.split(":", 1)
             if data_length:
@@ -115,7 +119,7 @@ class Client(asyncore.dispatcher):
         print "Starting server on %d" % port
         self.create_socket(socket.AF_INET, socket.SOCK_STREAM)
         self.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.bind(("127.0.0.1", port))
+        self.bind(("", port))
         self.listen(1)
         try:
             asyncore.loop()
@@ -186,7 +190,7 @@ class Server(asyncore.dispatcher, object):
         self.datasource = None
 
     def run_job(self):
-        workers = [("tbuckley.com", 11123)]
+        workers = [("tbuckley.com", DEFAULT_PORT)]
         for worker in workers:
             sc = ServerChannel(worker, self)
         asyncore.loop()
