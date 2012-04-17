@@ -320,17 +320,16 @@ class TaskManager:
         if len(self.finished_maps[map_key]) == self.copies:
             votes = {}
             hashes = {}
-            print self.finished_maps[map_key]
             for copy_num in self.finished_maps[map_key]:
                 print self.finished_maps[map_key][copy_num]
-                h = hash(frozenset(self.finished_maps[map_key][copy_num].items()))
+                h = hash(frozenset(self.finished_maps[map_key][copy_num]))
                 if h not in votes:
                     votes[h] = 0
                     hashes[h] = self.finished_maps[map_key][copy_num]
                 votes[h] += 1
             majority_vote = max(votes.iteritems(), key=operator.itemgetter(1))[0]
-            if majority_vote > self.copies / 2:
-                map_output = hashes[majority]
+            if votes[majority_vote] > self.copies / 2:
+                map_output = hashes[majority_vote]
                 for (key, values) in map_output.iteritems():
                     if key not in self.map_results:
                         self.map_results[key] = []
