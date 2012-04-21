@@ -21,7 +21,7 @@ def reducefn(k, vs):
     import time
     time.sleep(0.5)
     result = sum(vs)
-    return (k, result)
+    yield (k, result)
 
 
 if __name__ == '__main__':
