@@ -22,8 +22,10 @@ Finally, to run your MapReduce job, call `ec262.run_job(data)`, where `data` is 
 See example.py for more information; it's a working script that counts the number of times each word appears in "Humpty Dumpty".
 
 ## Worker
-To start up a worker, run worker.py. You can specify the port you want it to run on using the `-P PORT` flag, and you can have it run in either verbose mode (`-v`) or loud mode (`-V`).
+To start up a worker, run worker.py. You can specify the port you want it to run on using the `-P PORT` flag (defaults to 11235), and you can have it run in either verbose mode (`-v`) or loud mode (`-V`).
 
 Example (verbose mode, running on port 12345):
 
     python worker.py -v -P 12345
+
+You can also run it by importing `ec262` from a script and then calling `ec262.run_worker([port=11235])`.
