@@ -55,7 +55,7 @@ class Worker(Protocol):
 
     def call_mapfn(self, command, data):
         """Run the map function on the given key-value pairs"""
-        logging.info("Mapping")
+        logging.info("Mapping %s..." % (repr(data)[:30]))
         results = {}
         for row in data:
             key, value = row
@@ -69,12 +69,11 @@ class Worker(Protocol):
 
     def call_reducefn(self, command, data):
         """Run the reduce function on the given key-values pairs"""
-        logging.info("Reducing %s" % repr(data))
+        logging.info("Reducing %s" % repr(data)[:30])
         results = {}
         for row in data:
             key, values = row
             output = self.reducefn(key, values)
-            logging.debug(" -> Output %s" % repr(output))
             for key, value in output:
                 results[key] = value
         self.send_command('taskcomplete', results)

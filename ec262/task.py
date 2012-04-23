@@ -1,6 +1,7 @@
 import itertools
 import random
 import uuid
+import logging
 
 class DataChunker(object):
     """Class that allows us to iterate through data with dynamic chunking"""
@@ -93,7 +94,7 @@ class CommandTask(Task):
     
     def handle_worker(self, worker):
         """Run the command by having the worker send it out"""
-        print "SEND_COMMAND: ", self.command, self.data
+        logging.debug("SEND_COMMAND: ", self.command, self.data)
         worker.send_command(self.command, self.data)
         
 
@@ -168,7 +169,6 @@ class Job(object):
         self.result = self.merge_results([t.result for t in tasks])
         
     def merge_results(self, results):
-        print "HERE"
         return results
 
 
@@ -179,7 +179,6 @@ class MapReduceJob(Job):
     def __iter__(self):
         mapjob = Job(self.data, self.TaskClass, command='map', **self.kwargs)
         mapjob.merge_results = self.merge_map_results
-        print mapjob.merge_results
         for t in mapjob:
             yield t
         reducejob = Job(mapjob.result, self.TaskClass, command='reduce', **self.kwargs)
@@ -200,7 +199,6 @@ class MapReduceJob(Job):
         return output
     
     def merge_reduce_results(self, results):
-        print results
         output = {}
         for data in results:
             for key, value in data.iteritems():

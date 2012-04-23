@@ -9,7 +9,7 @@ def mapfn(k, v):
 @reducer
 def reducefn(k, vs):
     result = sum(vs)
-    return (k, result)
+    yield (k, result)
 
 
 if __name__ == '__main__':
