@@ -1,5 +1,8 @@
-''' discovery.py
-    A module for dealing with all things related to the discovery service.
+'''
+discovery.py
+------------
+
+A module for dealing with all things related to the discovery service.
 '''
 
 import json
