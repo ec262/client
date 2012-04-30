@@ -41,10 +41,11 @@ class UnknownTask(Exception):
 ################# Helper methods ###################
 ####################################################
 
-# Monkypatch 'json' method onto requests.Response objects
 def _request_to_json(self):
     ''' Turns a response encoded in JSON into a Python object '''
     return json.loads(self.content)
+    
+# Monkypatch 'json' method onto requests.Response objects    
 setattr(requests.Response, 'json', _request_to_json)
 
 def _to_json_list(data):
