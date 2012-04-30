@@ -29,7 +29,7 @@ class InsufficientCredits(Exception):
         self.needed_credits = needed_credits
         
     def __str__(self):
-        return "Available credits: %s; Needed credits: %s" %
+        return "Available credits: %s; Needed credits: %s" % \
                 (self.available_credits, self.needed_credits)
         
 class UnknownTask(Exception):
@@ -66,6 +66,16 @@ def _to_json_list(data):
 def _from_json_list(data):
     ''' Returns a dict from data encoded as a JSON list. '''
     return dict(json.loads(data))
+
+# Test JSON list conversion
+data = {"b": 1, "a": 2}
+json_list_data = _to_json_list(data)
+
+print str(json_list_data)
+print expected_str
+assert expected_str == '[["a", 2], ["b", 1]]'
+assert str(json_list_data) == expected_str
+assert _from_json_list(json_list_data) == data
 
 def _crypt_data(data, task_id, encrypt=True):
     ''' Requests a key from the server and returns encrypted or decrypted
@@ -122,7 +132,7 @@ def get_tasks(num_tasks):
     
     if response.status_code == requests.codes.ok:
         return json.loads(request.text)
-    elif response.result == 406
+    elif response.result == 406:
         info = json.loads(request.text)
         raise InsufficientCredits(available=info["available_credits"],
                                   needed=info["needed_credits"])
