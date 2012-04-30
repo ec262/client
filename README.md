@@ -87,3 +87,10 @@ Unexpected challenges
   testing those pieces separately. We also tried decrypting data that was
   encrypted with a bogus key, and simply made sure that the right exception
   was thrown during decryption.
+  
+TODO
+----
+
+* Finish this guide
+
+* Make a list of dependencies somewhere? requests, pycrypto...
