@@ -7,10 +7,7 @@ import requests
 
 from base64 import b64decode
 from Crypto.Cipher import AES
-
-DISCOVERY_SERVICE_URL = "http://ec262discovery.herokuapp.com/"
-DEFAULT_PORT = 2626
-DEFAULT_TTL = 60
+from settings import DISCOVERY_SERVICE_URL, DEFAULT_PORT, DEFAULT_TTL
 
 ###############################################
 ################# Exceptions ##################
@@ -106,6 +103,8 @@ def register_worker(port=DEFAULT_PORT, ttl=DEFAULT_TTL):
         1m by default; workers should periodically re-register and 
         need to register after completing a task. Returns a dictionary with
         all known info about the worker.
+        
+        Throws ServerError
     '''
     url = DISCOVERY_SERVICE_URL + "/workers"
     payload = {"port": port, "ttl": ttl}
@@ -120,6 +119,8 @@ def get_tasks(num_tasks):
         dictionary of the form:
         { "1": ["worker1:port", "worker2:port", "worker3:port"],
           "2": ["worker4:port", ... ], ... }
+          
+        Throws ServerError, InsufficientCredits
     '''
     url = DISCOVERY_SERVICE_URL + "/tasks"
     payload = {"n": num_tasks}
@@ -137,6 +138,8 @@ def get_tasks(num_tasks):
 def encrypt_data(data, task_id):
     ''' Encrypts the data (encoded as a dictionary) corresponding to a given
         task so that it can be sent over the wire.
+        
+        Throws ServerError, UnknownTask
     '''
     encryption = True
     key = _get_key(task_id, encryption)
@@ -147,6 +150,8 @@ def decrypt_data(data, task_id):
         encrypted data returned by all three workers is the same; foreman will
         not be able to get credits back once they call it. If the data does
         not check out and the foreman wants a refund, use invalidate_data().
+        
+        Throws ServerError, UnknownTask
     '''
     encryption = False
     key = _get_key(task_id, encryption)
@@ -155,6 +160,8 @@ def decrypt_data(data, task_id):
 def invalidate_data(task_id):
     ''' Get a refund for the given task ID. Once this is used, the data cannot
         be decrypted. Returns the number of credits the caller now has.
+        
+        Throws ServerError
     '''
     url = DISCOVERY_SERVICE_URL + "/tasks/" + task_id
     payload = {"valid": 0}
