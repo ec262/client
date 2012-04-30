@@ -9,12 +9,6 @@ from base64 import b64decode
 from Crypto.Cipher import AES
 from settings import DISCOVERY_SERVICE_URL, DEFAULT_PORT, DEFAULT_TTL
 
-# Monkypatch 'json' method onto requests.Response objects
-def request_to_json(self):
-    ''' Turns a response encoded in JSON into a Python object '''
-    return json.loads(self.content)
-setattr(requests.Response, 'json', request_to_json)
-
 ###############################################
 ################# Exceptions ##################
 ###############################################
@@ -46,6 +40,12 @@ class UnknownTask(Exception):
 ####################################################
 ################# Helper methods ###################
 ####################################################
+
+# Monkypatch 'json' method onto requests.Response objects
+def _request_to_json(self):
+    ''' Turns a response encoded in JSON into a Python object '''
+    return json.loads(self.content)
+setattr(requests.Response, 'json', _request_to_json)
 
 def _to_json_list(data):
     ''' Data is a dictionary, but unfortunately keys can be in arbitrary
