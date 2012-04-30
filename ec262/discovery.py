@@ -1,13 +1,14 @@
-''' discovery_interface.py
+''' discovery.py
     A module for dealing with all things related to the discovery service.
 '''
 
 import json
-import base64
 import requests
+
+from base64 import b64decode
 from Crypto.Cipher import AES
 
-DISCOVERY_SERVICE_URL = "http://ec262discoveryservice.herokuapp.com"
+DISCOVERY_SERVICE_URL = "http://ec262discovery.herokuapp.com/"
 DEFAULT_PORT = 2626
 DEFAULT_TTL = 60
 
@@ -21,7 +22,7 @@ class ServerError(Exception):
         self.response = response
         
     def __str__(self):
-        return "Status: " + self.code + "\n" + self.response
+        return "Status: " + str(self.code) + "\n" + self.response
 
 class InsufficientCredits(Exception):
     def __init__(self, available=None, needed=None):
@@ -58,7 +59,8 @@ def _to_json_list(data):
     
     # Convert to JSON and pad with whitespace
     json_str = json.dumps(list_data)
-    bytes_needed = len(json_str) % 8
+    byte_len = len(bytearray(json_str, 'utf-8'))
+    bytes_needed = 16 - (byte_len % 16)
     json_str += " " * bytes_needed
     
     return json_str
@@ -67,40 +69,33 @@ def _from_json_list(data):
     ''' Returns a dict from data encoded as a JSON list. '''
     return dict(json.loads(data))
 
-# Test JSON list conversion
-data = {"b": 1, "a": 2}
-json_list_data = _to_json_list(data)
-
-print str(json_list_data)
-print expected_str
-assert expected_str == '[["a", 2], ["b", 1]]'
-assert str(json_list_data) == expected_str
-assert _from_json_list(json_list_data) == data
-
-def _crypt_data(data, task_id, encrypt=True):
-    ''' Requests a key from the server and returns encrypted or decrypted
-        data. Data should be encoded as a dictionary.
-    '''
+def _get_key(task_id, encryption=True):
+    ''' Requests a key from the server for encryption/decrption'''
+    
     url = DISCOVERY_SERVICE_URL + "/tasks/" + task_id
-    method = 'get' if encrypt else 'delete'
+    method = 'get' if encryption else 'delete'
     payload = {"valid": 1} # Only necessary for encryption, but whatever
     response = requests.request(method, url, data=payload)
     
     if response.status_code == requests.codes.ok:
-        key_dict = json.loads(request.text)
-        key = base64.b64decode(key_dict["key"])
-        encryptor = AES.new(key, AES.MODE_CBC)
-        if encrypt:
-            encrypted_data = encryptor.encrypt(_to_json_list(data))
-            return encrypted_data
-        else:
-            decrypted_data = encryptor.decrypt(_from_json_list(data))
-            return decrypted_data
-        
+        key_dict = json.loads(response.content)
+        return b64decode(key_dict["key"])
     elif response.status_code == 404:
         raise UnknownTask(task_id=task_id)
     else:
-        raise ServerError(code=response.status_code, response=response.text)
+        raise ServerError(code=response.status_code,
+                          response=response.content)
+
+def _crypt_data(data, key, encryption=True):
+    ''' Encrypts/decrypts data encoded as a dictionary '''
+
+    encryptor = AES.new(key, AES.MODE_CBC)
+    if encryption:
+        result = encryptor.encrypt(_to_json_list(data))
+    else:
+        result = _from_json_list(encryptor.decrypt(data))
+
+    return result
 
 ###################################################
 ################# Public methods ##################
@@ -116,9 +111,9 @@ def register_worker(port=DEFAULT_PORT, ttl=DEFAULT_TTL):
     payload = {"port": port, "ttl": ttl}
     response = requests.post(url, data=payload)
     if response.status_code == requests.codes.ok:
-        return json.loads(request.text)
+        return json.loads(response.content)
     else:
-        raise ServerError(code=response.status_code, response=response.text)
+        raise ServerError(code=response.status_code, response=response.content)
 
 def get_tasks(num_tasks):
     ''' Get a list of tasks and workers from the discovery service. Returns a
@@ -131,19 +126,21 @@ def get_tasks(num_tasks):
     response = requests.post(url, data=payload)
     
     if response.status_code == requests.codes.ok:
-        return json.loads(request.text)
+        return json.loads(response.content)
     elif response.result == 406:
-        info = json.loads(request.text)
+        info = json.loads(response.content)
         raise InsufficientCredits(available=info["available_credits"],
                                   needed=info["needed_credits"])
     else:
-        raise ServerError(code=response.status_code, response=response.text)
+        raise ServerError(code=response.status_code, response=response.content)
 
 def encrypt_data(data, task_id):
     ''' Encrypts the data (encoded as a dictionary) corresponding to a given
         task so that it can be sent over the wire.
     '''
-    return _crypt_data(data, task_id, encrypt=True)
+    encryption = True
+    key = _get_key(task_id, encryption)
+    return _crypt_data(data, key, encryption)
         
 def decrypt_data(data, task_id):
     ''' Decrypts the data with the given task ID. Only use this if the
@@ -151,19 +148,74 @@ def decrypt_data(data, task_id):
         not be able to get credits back once they call it. If the data does
         not check out and the foreman wants a refund, use invalidate_data().
     '''
-    return _crypt_data(data, task_id, encrypt=False)
+    encryption = False
+    key = _get_key(task_id, encryption)
+    return _crypt_data(data, key, encryption)
     
 def invalidate_data(task_id):
     ''' Get a refund for the given task ID. Once this is used, the data cannot
         be decrypted. Returns the number of credits the caller now has.
     '''
-    url = DISCOVERY_SERVICE_URL + "/tasks" + task_id
+    url = DISCOVERY_SERVICE_URL + "/tasks/" + task_id
     payload = {"valid": 0}
     response = requests.delete(url, data=payload)
     if response.status_code == requests.codes.ok:
-        credits_dict = json.loads(request.text)
+        credits_dict = json.loads(response.content)
         return credits_dict["credits"]
     else:
-        raise ServerError(code=response.status_code, response=response.text)
+        raise ServerError(code=response.status_code, response=response.content)
+  
+  
+#######################################################
+#################### Tests ############################
+####################################################### 
+
+# You can test this module by simplying running it. (Maybe not ideal.)
+# DANGER: Testing this code seeds the production DB (also possibly not ideal)
+
+if __name__ == '__main__':
+
+    data = {"b": 1, "a": 2}
     
+    # Test JSON list conversion
+    json_list_data = _to_json_list(data)
+    assert str(json_list_data) == '[["a", 2], ["b", 1]]            '
+    assert _from_json_list(json_list_data) == data
+    
+    # Seed DB
+    seed_response = requests.get(DISCOVERY_SERVICE_URL + "/seed")
+    assert seed_response.status_code == requests.codes.ok
+    tasks = json.loads(seed_response.content)
+    
+    # Test registration
+    register_worker()
+    
+    # Test encryption
+    task_id = tasks.keys()[0]
+    encrypted_data = encrypt_data(data, task_id)
+    key = _get_key(task_id, encryption=True)
+    assert data == _crypt_data(encrypted_data, key, encryption=False)
+    
+    # Test getting tasks
+    tasks = get_tasks(3)
+    
+    # Test invalidation
+    task_id = tasks.keys()[0]
+    assert invalidate_data(task_id) == 6
+    
+    # Test that you actually decrypt things
+    task_id = tasks.keys()[1]
+    key = _get_key(task_id, encryption=False)
+    encrypted_data = _crypt_data(data, key, encryption=True)
+    assert data == _crypt_data(encrypted_data, key, encryption=False)
+
+    # Test decrypt_data by making sure it throws the right exception (?)
+    task_id = tasks.keys()[2]
+    try:
+        decrypt_data(encrypted_data, task_id)
+    except ValueError as err:
+        # In principle, this just means that we (obviously) didn't encode
+        # the data correctly, which should impossible...
+        assert str(err) == "No JSON object could be decoded"
+        
     
