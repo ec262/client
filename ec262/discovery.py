@@ -9,6 +9,12 @@ from base64 import b64decode
 from Crypto.Cipher import AES
 from settings import DISCOVERY_SERVICE_URL, DEFAULT_PORT, DEFAULT_TTL
 
+# Monkypatch 'json' method onto requests.Response objects
+def request_to_json(self):
+    ''' Turns a response encoded in JSON into a Python object '''
+    return json.loads(self.content)
+setattr(requests.Response, 'json', request_to_json)
+
 ###############################################
 ################# Exceptions ##################
 ###############################################
@@ -75,7 +81,7 @@ def _get_key(task_id, encryption=True):
     response = requests.request(method, url, data=payload)
     
     if response.status_code == requests.codes.ok:
-        key_dict = json.loads(response.content)
+        key_dict = response.json()
         return b64decode(key_dict["key"])
     elif response.status_code == 404:
         raise UnknownTask(task_id)
@@ -108,7 +114,7 @@ def register_worker(port=DEFAULT_PORT, ttl=DEFAULT_TTL):
     payload = {"port": port, "ttl": ttl}
     response = requests.post(url, data=payload)
     if response.status_code == requests.codes.ok:
-        return json.loads(response.content)
+        return response.json()
     else:
         raise ServerError(response)
 
@@ -124,9 +130,9 @@ def get_tasks(num_tasks):
     response = requests.post(url, data=payload)
     
     if response.status_code == requests.codes.ok:
-        return json.loads(response.content)
+        return response.json()
     elif response.result == 406:
-        raise InsufficientCredits(json.loads(response.content))
+        raise InsufficientCredits(response.json())
     else:
         raise ServerError(response)
 
@@ -159,7 +165,7 @@ def invalidate_data(task_id):
     payload = {"valid": 0}
     response = requests.delete(url, data=payload)
     if response.status_code == requests.codes.ok:
-        credits_dict = json.loads(response.content)
+        credits_dict = response.json()
         return credits_dict["credits"]
     else:
         raise ServerError(response)
@@ -184,7 +190,7 @@ if __name__ == '__main__':
     # Seed DB
     seed_response = requests.get(DISCOVERY_SERVICE_URL + "/seed")
     assert seed_response.status_code == requests.codes.ok
-    tasks = json.loads(seed_response.content)
+    tasks = seed_response.json()
     
     # Test registration
     register_worker()
