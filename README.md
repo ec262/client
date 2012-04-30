@@ -1,4 +1,4 @@
-EC2(62) Foreman/Worker
+EC262 Client Libraries
 ======================
 
 Introduction
