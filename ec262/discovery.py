@@ -5,7 +5,7 @@
 import json
 import requests
 
-from base64 import b64decode
+from base64 import b64decode, b64encode
 from Crypto.Cipher import AES
 from settings import DISCOVERY_SERVICE_URL, DEFAULT_PORT, DEFAULT_TTL
 
@@ -90,13 +90,16 @@ def _get_key(task_id, encryption=True):
         raise ServerError(response)
 
 def _crypt_data(data, key, encryption=True):
-    ''' Encrypts/decrypts data encoded as a dictionary '''
+    ''' Encrypts/decrypts data encoded as a dictionary. First turns data
+        into a JSON list, then uses AES-128 with cipher-block chaining mode,
+        and finally encodes it with Base64. Does the inverse with decoding.
+    '''
 
     encryptor = AES.new(key, AES.MODE_CBC)
     if encryption:
-        result = encryptor.encrypt(_to_json_list(data))
+        result = b64encode(encryptor.encrypt(_to_json_list(data)))
     else:
-        result = _from_json_list(encryptor.decrypt(data))
+        result = _from_json_list(encryptor.decrypt(b64decode(data)))
 
     return result
 
