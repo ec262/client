@@ -76,12 +76,14 @@ def _from_json_list(data):
     ''' Returns a dict from data encoded as a JSON list. '''
     return dict(json.loads(data))
 
-def _get_key(task_id, encryption=True):
+def _get_key(task_id, encryption=True, missing=None):
     ''' Requests a key from the server for encryption/decrption'''
     
     url = DISCOVERY_SERVICE_URL + "/tasks/" + task_id
     method = 'get' if encryption else 'delete'
     payload = {"valid": 1} # Only necessary for encryption, but whatever
+    if missing: 
+        payload["missing"] = missing
     response = requests.request(method, url, data=payload)
     
     if response.status_code == requests.codes.ok:
@@ -152,7 +154,7 @@ def encrypt_data(data, task_id):
     key = _get_key(task_id, encryption)
     return _crypt_data(data, key, encryption)
         
-def decrypt_data(data, task_id):
+def decrypt_data(data, task_id, missing=None):
     ''' Decrypts the data with the given task ID. Only use this if the
         encrypted data returned by all three workers is the same; foreman will
         not be able to get credits back once they call it. If the data does
@@ -160,7 +162,7 @@ def decrypt_data(data, task_id):
         Throws ServerError, UnknownTask
     '''
     encryption = False
-    key = _get_key(task_id, encryption)
+    key = _get_key(task_id, encryption, missing)
     return _crypt_data(data, key, encryption)
     
 def invalidate_data(task_id):
@@ -222,9 +224,12 @@ if __name__ == '__main__':
     assert data == _crypt_data(encrypted_data, key, encryption=False)
 
     # Test decrypt_data by making sure it throws the right exception (?)
+    # Also make sure we can include a missing orker
     task_id = tasks.keys()[2]
+    workers = [w.split(":")[0] for w in tasks[task_id]]
+    missing_worker = workers[0]
     try:
-        decrypt_data(encrypted_data, task_id)
+        decrypt_data(encrypted_data, task_id, missing=missing_worker)
     except ValueError as err:
         # In principle, this just means that we (obviously) didn't encode
         # the data correctly, which should impossible...
