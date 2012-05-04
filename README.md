@@ -4,8 +4,17 @@ EC262 Client Libraries
 Introduction
 ------------
 
-**TODO**
+The EC262 Client Libraries contain both Foreman and Worker code. After finding 
+workers through the discovery service, the Foreman sends pickled map and reduce
+functions and then data to mappers and reducers.
 
+This is built on top of a lightweight [Python](http://www.python.org/) MapReduce 
+implementation called [Mincemeat](https://github.com/michaelfairley/mincemeatpy).
+In Mincemeat, the workers request jobs from the foreman, and our system is the
+the opposite. Once workers registered with the discovery service, the foreman
+contacts them with jobs. Other major modifications to Mincemeat include
+sandboxing, cheater detection, discovery service integration, encryption
+for fairness in the credit system, and significant code refactoring.
 
 Quick start
 -----------
@@ -60,7 +69,12 @@ Design decisions
   list of [key, value] lists sorted by key. These are encrypted using AES-128
   in cipher-block chaining (CBC) mode, and finally serialized using Base64.
 
-**TODO**
+* Sandboxing is done by disallowing potentially dangerous builtin functions
+  and whitelisting modules.
+
+* Specification of map and reduce functions has been changed to use decorators.
+
+* Client processes are currently differentiated by UUIDs.
 
 
 Unexpected challenges
@@ -88,9 +102,3 @@ Unexpected challenges
   encrypted with a bogus key, and simply made sure that the right exception
   was thrown during decryption.
   
-TODO
-----
-
-* Finish this guide
-
-* Make a list of dependencies somewhere? requests, pycrypto...
