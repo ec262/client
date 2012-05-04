@@ -3,6 +3,7 @@ import random
 import uuid
 import logging
 from discovery import decrypt_data, invalidate_data
+import operator
 
 class DataChunker(object):
     """Class that allows us to iterate through data with dynamic chunking"""
@@ -135,13 +136,28 @@ class RepeatedTask(Task):
     
     def is_complete(self, worker, result):
         if len(self.results) == self.repetitions:
-            # test if all results (or majority) match
-            # else invalidate, throw out all results/workers, set back to WAITING
-            return True
+            votes = {}
+            for res in self.results:
+                h = hash(res)
+                if h not in votes:
+                    votes[h] = 0
+                votes[h] += 1
+            majority_vote = max(votes.iteritems(), key=operator.itemgetter(1))[0]
+            if votes[majority_vote] > (self.repetitions / 2):
+                self.result_hash = majority_vote
+                return True
+            else:
+                logging.info("Invalidating results")
+                invalidate_data(self.id)
+                self.results = {}
+                self.state = Task.WAITING
+                return False
         return False
     
     def merge_results(self):
-        return self.results[0]
+        for res in self.results:
+            if hash(res) == self.result_hash:
+                return res
     
     def handle_repeated_worker(worker, rep):
         pass
