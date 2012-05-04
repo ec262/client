@@ -2,6 +2,7 @@ import itertools
 import random
 import uuid
 import logging
+from discovery import decrypt_data, invalidate_data
 
 class DataChunker(object):
     """Class that allows us to iterate through data with dynamic chunking"""
@@ -31,8 +32,8 @@ class Task(object):
     RUNNING = 1
     COMPLETE = 2
     
-    def __init__(self, *args, **kwargs):
-        self.id = uuid.uuid4()
+    def __init__(self, tid=None, *args, **kwargs):
+        self.id = tid or uuid.uuid4()
         self._state = None
         self.state = Task.WAITING
         self.result = None
@@ -48,7 +49,7 @@ class Task(object):
     def complete(self, worker, result):
         """Mark the task as complete"""
         if self.state != Task.COMPLETE and self.is_complete(worker, result):
-            self.result = (worker, result)
+            self.result = (worker, decrypt_data(result, self.id))
             self.state = Task.COMPLETE
     
     def set_state(self, state):
@@ -94,8 +95,12 @@ class CommandTask(Task):
     
     def handle_worker(self, worker):
         """Run the command by having the worker send it out"""
-        logging.debug("SEND_COMMAND: ", self.command, self.data)
-        worker.send_command(self.command, self.data)
+        data = {
+            'task_id': self.id,
+            'data': self.data
+        }
+        logging.debug("SEND_COMMAND: ", self.command, data)
+        worker.send_command(self.command, data)
         
 
 class RepeatedTask(Task):
@@ -125,11 +130,15 @@ class RepeatedTask(Task):
                 self.results[rep] = result
                 break
         if self.state != Task.COMPLETE and self.is_complete(worker, result):
-            self.result = self.merge_results()
+            self.result = decrypt_data(self.merge_results(), self.id)
             self.state = Task.COMPLETE
     
     def is_complete(self, worker, result):
-        return len(self.results) == self.repetitions
+        if len(self.results) == self.repetitions:
+            # test if all results (or majority) match
+            # else invalidate, throw out all results/workers, set back to WAITING
+            return True
+        return False
     
     def merge_results(self):
         return self.results[0]
@@ -160,12 +169,13 @@ class Job(object):
     def __iter__(self):
         dc = DataChunker(self.data)
         tasks = [self.TaskClass(data=data, **self.kwargs) for data in dc]
-        while any([t.state == Task.WAITING for t in tasks]):
-            for t in filter(lambda t: t.state == Task.WAITING, tasks):
-                yield t
-        while any([t.state != Task.COMPLETE for t in tasks]):
-            for t in filter(lambda t: t.state != Task.COMPLETE, tasks):
-                yield t
+        while not all([t.state == Task.COMPLETE for t in tasks]):
+            if any([t.state == Task.WAITING for t in tasks]):
+                for t in filter(lambda t: t.state == Task.WAITING, tasks):
+                    yield t
+            elif any([t.state != Task.COMPLETE for t in tasks]):
+                for t in filter(lambda t: t.state != Task.COMPLETE, tasks):
+                    yield t
         self.result = self.merge_results([t.result for t in tasks])
         
     def merge_results(self, results):
@@ -192,6 +202,7 @@ class MapReduceJob(Job):
     def merge_map_results(self, results):
         output = {}
         for data in results:
+            print data
             for key, values in data.iteritems():
                 if key not in output:
                     output[key] = ()
